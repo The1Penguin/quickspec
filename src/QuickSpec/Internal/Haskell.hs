@@ -68,6 +68,8 @@ import Test.QuickCheck.Random
 import Data.IORef
 import Control.Monad.IO.Class
 import Control.Exception
+import QuickSpec.Internal.Parse
+import Text.ParserCombinators.ReadP(ReadP, string)
 
 baseInstances :: Instances
 baseInstances =
@@ -631,6 +633,7 @@ data Config =
     cfg_default_to :: Type,
     cfg_infer_instance_types :: Bool,
     cfg_background :: [Prop (Term Constant)],
+    cfg_background_str :: [String],
     cfg_print_filter :: Prop (Term Constant) -> Bool,
     cfg_templates :: [(String,Prop (Term Constant))],
     cfg_print_style :: PrintStyle,
@@ -649,6 +652,7 @@ lens_constants = lens cfg_constants (\x y -> y { cfg_constants = x })
 lens_default_to = lens cfg_default_to (\x y -> y { cfg_default_to = x })
 lens_infer_instance_types = lens cfg_infer_instance_types (\x y -> y { cfg_infer_instance_types = x })
 lens_background = lens cfg_background (\x y -> y { cfg_background = x })
+lens_background_str = lens cfg_background_str (\x y -> y { cfg_background_str = x })
 lens_print_filter = lens cfg_print_filter (\x y -> y { cfg_print_filter = x })
 lens_templates = lens cfg_templates (\x y -> y {cfg_templates = x})
 lens_print_style = lens cfg_print_style (\x y -> y { cfg_print_style = x })
@@ -669,6 +673,7 @@ defaultConfig =
     cfg_default_to = typeRep (Proxy :: Proxy Int),
     cfg_infer_instance_types = False,
     cfg_background = [],
+    cfg_background_str = [],
     cfg_print_filter = \_ -> True,
     cfg_templates = [],
     cfg_print_style = ForHumans,
@@ -846,10 +851,17 @@ quickSpec cfg@Config{..} = do
     main = do
       forM_ cfg_background $ \prop -> do
         add prop
+      forM_ cfg_background_str $ \prop_str -> do
+        add (parseProp parseFun prop_str)
+
       mapM_ round [0..rounds-1]
       where
         round n = mainOf n (concat . take 1 . drop n) (concat . take (n+1))
         rounds = length cfg_constants
+
+    -- Used in adding background functions from strings
+    parseFun :: ReadP Constant
+    parseFun = msum [do { string (con_name c); return c } | c <- constants ]
 
     -- Used in checkConsistency. Generate a term to be used when a
     -- Twee proof contains a hole ("?"), i.e. a don't-care variable.
@@ -903,5 +915,12 @@ quickSpec cfg@Config{..} = do
         main
         when cfg_check_consistency $ void $ execStateT checkConsistency Map.empty
 
-  -- conditionalise so that conditional properties are returned in readable format
-  fmap conditionalise . reverse <$> readIORef props
+  let maybeConditionalise prop
+        | prop == prop' = [prop]
+        | otherwise = [prop, prop']
+        where prop' = conditionalise prop
+
+  -- Return conditional properties both in conditionalised and raw form.
+  -- Raw form is needed if the properties will be passed to addBackground,
+  -- but conditionalised is better for other uses.
+  concatMap maybeConditionalise . reverse <$> readIORef props
